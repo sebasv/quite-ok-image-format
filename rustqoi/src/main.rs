@@ -13,19 +13,6 @@ const QOI_OP_LUMA: u8 = 0b10000000;
 const QOI_OP_RGB: u8 = 0b11111110;
 const QOI_OP_RGBA: u8 = 0b11111111;
 
-#[derive(PartialEq, Eq)]
-enum State {
-    HEADER,
-    RGBA,
-    RGB,
-    GB,
-    B,
-    GBA,
-    BA,
-    A,
-    LUMA,
-}
-
 fn decode<'a>(
     data: &'a (impl AsRef<[u8]> + ?Sized),
 ) -> Result<(Vec<u8>, u32, u32, bool, bool), String> {
@@ -37,89 +24,48 @@ fn decode<'a>(
     let (width, height, channels, colorspace) = try_decode_header(&header)?;
     let bytes_per_pixel = if channels { 4 } else { 3 };
     let mut out = Vec::with_capacity(width as usize * height as usize * bytes_per_pixel);
-    let mut state = State::HEADER;
     let mut runner = Runner::new();
     let mut previous_pixel = Pixel::default();
-    for byte in body {
-        match state {
-            State::HEADER => {
-                state = match *byte {
-                    QOI_OP_RGB => State::RGB,
-                    QOI_OP_RGBA => State::RGBA,
-                    _ if byte >> 6 == QOI_OP_LUMA >> 6 => State::LUMA,
-                    _ => State::HEADER,
-                };
-                if state == State::LUMA || state == State::HEADER {
-                    let header = byte & QOI_OP_RUN;
-                    let data = byte & !QOI_OP_RUN;
-                    match header {
-                        QOI_OP_DIFF => {
-                            previous_pixel = previous_pixel - DIFF_OFFSET + Pixel::from_diff(data);
-                            runner.update(previous_pixel);
-                            previous_pixel.copy_to_vec(&mut out);
-                            // out.append(&mut previous_pixel.to_vec())
-                        }
 
-                        QOI_OP_INDEX => {
-                            previous_pixel = runner.memory[data as usize];
-                            previous_pixel.copy_to_vec(&mut out)
-                        }
-                        QOI_OP_LUMA => {
-                            previous_pixel = previous_pixel - LUMA_DIFF_OFFSET + data;
-                        }
-                        QOI_OP_RUN => {
-                            for _ in 0..(data + 1) {
-                                previous_pixel.copy_to_vec(&mut out);
-                                // out.append(&mut previous_pixel.to_vec());
-                            }
-                        }
-                        _ => unreachable!(),
+    let mut iter = body.iter();
+    while let Some(&byte) = iter.next() {
+        let mut run = 1;
+        match byte {
+            QOI_OP_RGB => {
+                previous_pixel.r = *iter.next().unwrap();
+                previous_pixel.g = *iter.next().unwrap();
+                previous_pixel.b = *iter.next().unwrap();
+                runner.update(previous_pixel);
+            }
+            QOI_OP_RGBA => {
+                previous_pixel.r = *iter.next().unwrap();
+                previous_pixel.g = *iter.next().unwrap();
+                previous_pixel.b = *iter.next().unwrap();
+                previous_pixel.a = *iter.next().unwrap();
+                runner.update(previous_pixel);
+            }
+            _ => {
+                let data = byte & !QOI_OP_RUN;
+                match byte & QOI_OP_RUN {
+                    QOI_OP_RUN => run = 1 + data,
+                    QOI_OP_DIFF => {
+                        previous_pixel = previous_pixel.decode_diff(data);
+                        runner.update(previous_pixel);
                     }
+                    QOI_OP_INDEX => {
+                        previous_pixel = runner.memory[data as usize];
+                    }
+                    QOI_OP_LUMA => {
+                        previous_pixel =
+                            previous_pixel.decode_luma_diff(data, *iter.next().unwrap());
+                        runner.update(previous_pixel);
+                    }
+                    _ => panic!("invalid byte encountered during decode"),
                 }
             }
-            State::RGBA => {
-                previous_pixel.r = *byte;
-                state = State::GBA
-            }
-            State::GBA => {
-                previous_pixel.g = *byte;
-                state = State::BA
-            }
-            State::BA => {
-                previous_pixel.b = *byte;
-                state = State::A
-            }
-            State::A => {
-                previous_pixel.a = *byte;
-                previous_pixel.copy_to_vec(&mut out);
-                // out.append(&mut previous_pixel.to_vec());
-                runner.update(previous_pixel);
-                state = State::HEADER
-            }
-            State::RGB => {
-                previous_pixel.r = *byte;
-                state = State::GB
-            }
-            State::GB => {
-                previous_pixel.g = *byte;
-                state = State::B
-            }
-            State::B => {
-                previous_pixel.b = *byte;
-                previous_pixel.copy_to_vec(&mut out);
-                // out.append(&mut previous_pixel.to_vec());
-                runner.update(previous_pixel);
-                state = State::HEADER
-            }
-            State::LUMA => {
-                const LAST_FOUR: u8 = 0b00001111;
-                previous_pixel.r = previous_pixel.r.wrapping_add(byte >> 4);
-                previous_pixel.b = previous_pixel.b.wrapping_add(byte & LAST_FOUR);
-                previous_pixel.copy_to_vec(&mut out);
-                // out.append(&mut previous_pixel.to_vec());
-                runner.update(previous_pixel);
-                state = State::HEADER;
-            }
+        }
+        for _ in 0..run {
+            previous_pixel.copy_to_vec(&mut out)
         }
     }
 
@@ -288,6 +234,20 @@ impl Pixel {
         vec.push(self.a);
     }
 
+    #[inline(always)]
+    fn decode_diff(&self, data: u8) -> Pixel {
+        *self - DIFF_OFFSET + Pixel::from_diff(data)
+    }
+
+    #[inline(always)]
+    fn decode_luma_diff(&self, data_1: u8, data_2: u8) -> Pixel {
+        let mut diffed = *self - LUMA_DIFF_OFFSET + data_1;
+        const LAST_FOUR: u8 = 0b00001111;
+        diffed.r = diffed.r.wrapping_add(data_2 >> 4);
+        diffed.b = diffed.b.wrapping_add(data_2 & LAST_FOUR);
+        diffed
+    }
+
     fn luma_diff_offset(&self) -> Option<(u8, u8)> {
         let new = {
             let mut t = *self + LUMA_DIFF_OFFSET;
@@ -309,10 +269,8 @@ impl Pixel {
             None
         }
     }
-    // fn to_vec(&self) -> Vec<u8> {
-    //     vec![self.r, self.g, self.b, self.a]
-    // }
 
+    #[inline(always)]
     fn from_diff(data: u8) -> Pixel {
         const LAST_TWO: u8 = 0b00000011;
         Pixel {
