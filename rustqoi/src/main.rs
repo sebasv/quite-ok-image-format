@@ -1,3 +1,5 @@
+#![feature(test)]
+extern crate test;
 use std::ops::{Add, Sub};
 
 const QOI_HEADER_SIZE: usize = 14;
@@ -54,16 +56,21 @@ fn decode<'a>(
                         QOI_OP_DIFF => {
                             previous_pixel = previous_pixel - DIFF_OFFSET + Pixel::from_diff(data);
                             runner.update(previous_pixel);
-                            out.append(&mut previous_pixel.to_vec())
+                            previous_pixel.copy_to_vec(&mut out);
+                            // out.append(&mut previous_pixel.to_vec())
                         }
 
-                        QOI_OP_INDEX => out.append(&mut runner.memory[data as usize].to_vec()),
+                        QOI_OP_INDEX => {
+                            previous_pixel = runner.memory[data as usize];
+                            previous_pixel.copy_to_vec(&mut out)
+                        }
                         QOI_OP_LUMA => {
                             previous_pixel = previous_pixel - LUMA_DIFF_OFFSET + data;
                         }
                         QOI_OP_RUN => {
                             for _ in 0..(data + 1) {
-                                out.append(&mut previous_pixel.to_vec());
+                                previous_pixel.copy_to_vec(&mut out);
+                                // out.append(&mut previous_pixel.to_vec());
                             }
                         }
                         _ => unreachable!(),
@@ -84,7 +91,8 @@ fn decode<'a>(
             }
             State::A => {
                 previous_pixel.a = *byte;
-                out.append(&mut previous_pixel.to_vec());
+                previous_pixel.copy_to_vec(&mut out);
+                // out.append(&mut previous_pixel.to_vec());
                 runner.update(previous_pixel);
                 state = State::HEADER
             }
@@ -98,7 +106,8 @@ fn decode<'a>(
             }
             State::B => {
                 previous_pixel.b = *byte;
-                out.append(&mut previous_pixel.to_vec());
+                previous_pixel.copy_to_vec(&mut out);
+                // out.append(&mut previous_pixel.to_vec());
                 runner.update(previous_pixel);
                 state = State::HEADER
             }
@@ -106,7 +115,8 @@ fn decode<'a>(
                 const LAST_FOUR: u8 = 0b00001111;
                 previous_pixel.r = previous_pixel.r.wrapping_add(byte >> 4);
                 previous_pixel.b = previous_pixel.b.wrapping_add(byte & LAST_FOUR);
-                out.append(&mut previous_pixel.to_vec());
+                previous_pixel.copy_to_vec(&mut out);
+                // out.append(&mut previous_pixel.to_vec());
                 runner.update(previous_pixel);
                 state = State::HEADER;
             }
@@ -270,6 +280,14 @@ const DIFF_OFFSET: Pixel = Pixel {
 };
 
 impl Pixel {
+    #[inline(always)]
+    fn copy_to_vec(&self, vec: &mut Vec<u8>) {
+        vec.push(self.r);
+        vec.push(self.g);
+        vec.push(self.b);
+        vec.push(self.a);
+    }
+
     fn luma_diff_offset(&self) -> Option<(u8, u8)> {
         let new = {
             let mut t = *self + LUMA_DIFF_OFFSET;
@@ -291,9 +309,9 @@ impl Pixel {
             None
         }
     }
-    fn to_vec(&self) -> Vec<u8> {
-        vec![self.r, self.g, self.b, self.a]
-    }
+    // fn to_vec(&self) -> Vec<u8> {
+    //     vec![self.r, self.g, self.b, self.a]
+    // }
 
     fn from_diff(data: u8) -> Pixel {
         const LAST_TWO: u8 = 0b00000011;
@@ -400,6 +418,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::io::Reader as ImageReader;
     #[test]
     fn test_encode_2x2() {
         let black: [u8; 4] = [0, 0, 0, 255];
@@ -413,6 +432,79 @@ mod tests {
 
         let encoded = encode(&image, 2, 2, true, true);
         assert_eq!(encoded, Ok(expected));
+    }
+    #[test]
+    fn test_encode_162_run() {
+        let black: [u8; 4] = [0, 0, 0, 255];
+        let len = 162;
+        let image = black.repeat(len);
+
+        let expected = vec![
+            113,
+            111,
+            105,
+            102,
+            0,
+            0,
+            0,
+            len as u8,
+            0,
+            0,
+            0,
+            1,
+            4,
+            1,
+            QOI_OP_RUN | 61,
+            QOI_OP_RUN | 61,
+            QOI_OP_RUN | 37,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ];
+
+        let encoded = encode(&image, len, 1, true, true);
+        assert_eq!(encoded, Ok(expected));
+    }
+    #[test]
+    fn test_decode_162_run() {
+        let black: [u8; 4] = [0, 0, 0, 255];
+        let len = 162;
+        let image = black.repeat(len);
+
+        let encoded = vec![
+            113,
+            111,
+            105,
+            102,
+            0,
+            0,
+            0,
+            len as u8,
+            0,
+            0,
+            0,
+            1,
+            4,
+            1,
+            QOI_OP_RUN | 61,
+            QOI_OP_RUN | 61,
+            QOI_OP_RUN | 37,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ];
+        let decoded = decode(&encoded);
+        assert_eq!(decoded, Ok((image, len as u32, 1, true, true)));
     }
 
     #[test]
@@ -451,9 +543,6 @@ mod tests {
 
     #[test]
     fn test_encode_decode_empty() {
-        let empty_image = vec![
-            113, 111, 105, 102, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1, 0, 0, 0, 0, 0, 0, 0, 1,
-        ];
         let encoded = encode(&[], 0, 0, true, true);
         let decoded = decode(&encoded.unwrap());
         assert_eq!(decoded.unwrap().0, vec![]);
@@ -461,9 +550,6 @@ mod tests {
 
     #[test]
     fn test_encode_decode_2x2() {
-        let empty_image = vec![
-            113, 111, 105, 102, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1, 0, 0, 0, 0, 0, 0, 0, 1,
-        ];
         let encoded = encode(&[], 0, 0, true, true);
         let decoded = decode(&encoded.unwrap());
         assert_eq!(decoded.unwrap().0, vec![]);
@@ -513,5 +599,95 @@ mod tests {
         let encoded = encode(&image, 2, 2, true, true);
         let decoded = decode(&encoded.unwrap());
         assert_eq!(decoded.unwrap().0, image);
+    }
+
+    #[test]
+    fn test_encode_decode_go() {
+        let img = ImageReader::open("../go.jpg")
+            .unwrap()
+            .decode()
+            .unwrap()
+            .into_rgba8();
+        let data = img.to_vec();
+        let width = img.width();
+        let height = img.height();
+        let has_alpha = true;
+        let s_rgb = true;
+        let encoded = encode(&data, width as usize, height as usize, has_alpha, s_rgb);
+        let decoded = decode(&encoded.unwrap()).unwrap();
+        assert_eq!(
+            (decoded.1, decoded.2, decoded.3, decoded.4),
+            (width, height, has_alpha, s_rgb)
+        );
+        assert_eq!(decoded.0.len(), data.len());
+        println!(
+            "{:?}",
+            decoded
+                .0
+                .chunks_exact(4)
+                .zip(data.chunks_exact(4))
+                .enumerate()
+                .filter(|(_, (l, r))| l != r)
+                .next()
+        );
+        assert!(decoded.0.iter().eq(data.iter()), "data not the same");
+    }
+}
+
+#[cfg(test)]
+mod benches {
+    use super::*;
+    use image::io::Reader as ImageReader;
+    use test::Bencher;
+
+    #[bench]
+    fn bench_encode_decode_go(b: &mut Bencher) {
+        let img = ImageReader::open("../go.jpg")
+            .unwrap()
+            .decode()
+            .unwrap()
+            .into_rgba8();
+        let data = img.to_vec();
+        let width = img.width();
+        let height = img.height();
+        let has_alpha = true;
+        let s_rgb = true;
+        b.iter(|| {
+            let encoded = encode(&data, width as usize, height as usize, has_alpha, s_rgb);
+            let _decoded = decode(&encoded.unwrap()).unwrap();
+        });
+    }
+    #[bench]
+    fn bench_encode_go(b: &mut Bencher) {
+        let img = ImageReader::open("../go.jpg")
+            .unwrap()
+            .decode()
+            .unwrap()
+            .into_rgba8();
+        let data = img.to_vec();
+        let width = img.width();
+        let height = img.height();
+        let has_alpha = true;
+        let s_rgb = true;
+        b.iter(|| {
+            let _encoded = encode(&data, width as usize, height as usize, has_alpha, s_rgb);
+        });
+    }
+    #[bench]
+    fn bench_decode_go(b: &mut Bencher) {
+        let img = ImageReader::open("../go.jpg")
+            .unwrap()
+            .decode()
+            .unwrap()
+            .into_rgba8();
+        let data = img.to_vec();
+        let width = img.width();
+        let height = img.height();
+        let has_alpha = true;
+        let s_rgb = true;
+        let encoded = encode(&data, width as usize, height as usize, has_alpha, s_rgb).unwrap();
+        b.iter(|| {
+            let _decoded = decode(&encoded).unwrap();
+        });
     }
 }

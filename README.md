@@ -20,6 +20,9 @@ The most striking difference between both experiences is that I wrote the Rust i
 * field orders flipped in struct creation
 * handling edge cases.
 
+### Edit
+After adding a more extensive test I did find a bug in my Rust code! I forgot to update the `previous_pixel` in the decoder after an index hit.
+
 ## Rust vs Go
 
 * In Rust, cargo will take care of all the boilerplate. By comparison the available `go` commands feel a bit lacking. That said, the `go` commands are still a step up from any other tooling I have experience with.
@@ -31,3 +34,6 @@ The most striking difference between both experiences is that I wrote the Rust i
 * The Rust formatter is much more strict. The Go formatter leaves plenty of room for flamewars about indentation and camel vs snake naming.
 * The Go error convention is identical to Rust's (in that you return a value), except that Rust uses a proper Monad which provides all kinds of conveniences. In contrast Go requires you to write a LOT of if statements.
 * I did not get to try Go's prime selling point: Goroutines. They look really nice and I'd like to experiment with them on a suitable problem.
+* The Go code was a bit (~10%) slower for the encoder, but significantly faster (3x) for the decoder. This was my own fault for using a lot of temporary heap allocations; These are relatively cheap in a garbage-collected language like Go due to the reuse of freed memory but very expensive in Rust due to its explicit memory management.
+
+

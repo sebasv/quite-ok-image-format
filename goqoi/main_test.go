@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"image"
+	_ "image/jpeg" // https://stackoverflow.com/a/39577526/5501815 // this is where I start hating Go
+	"os"
 	"testing"
 )
 
@@ -142,5 +145,124 @@ func TestEncode_decode_2x2(t *testing.T) {
 	if !bytes.Equal(decoded, image) {
 		t.Errorf("expected %d, got %d", image, decoded)
 
+	}
+}
+
+func getImage(filePath string) ([]byte, uint32, uint32, bool, bool, error) {
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, 0, 0, false, false, err
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return nil, 0, 0, false, false, err
+	}
+	// img = img.ColorModel().Convert(color.RGBAModel)
+	var b = img.Bounds()
+	var width = b.Dx()
+	var height = b.Dy()
+	var has_alpha = true
+	var s_rgb = true
+	var data = make([]byte, 0, width*height*4)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			var r, g, b, a = img.At(x, y).RGBA()
+			data = append(data, byte(r), byte(g), byte(b), byte(a))
+		}
+	}
+
+	return data, uint32(width), uint32(height), has_alpha, s_rgb, err
+}
+func BenchmarkEncodeDecodeGo(b *testing.B) {
+	var data, width, height, has_alpha, s_rgb, err = getImage("../go.jpg")
+	if err != nil {
+		b.Errorf("failed to open go file, %s", err)
+	}
+
+	for i := 0; i < b.N; i++ {
+		var encoded = encode(data, width, height, has_alpha, s_rgb)
+		_, _, _, _, _, _ = decode(encoded)
+		if err != nil {
+			b.Error("failed to decode")
+		}
+	}
+}
+func BenchmarkEncodeGo(b *testing.B) {
+	var data, width, height, has_alpha, s_rgb, err = getImage("../go.jpg")
+	if err != nil {
+		b.Errorf("failed to open go file, %s", err)
+	}
+
+	for i := 0; i < b.N; i++ {
+		_ = encode(data, width, height, has_alpha, s_rgb)
+		if err != nil {
+			b.Error("failed to decode")
+		}
+	}
+}
+func BenchmarkDecodeGo(b *testing.B) {
+	var data, width, height, has_alpha, s_rgb, err = getImage("../go.jpg")
+	if err != nil {
+		b.Errorf("failed to open go file, %s", err)
+	}
+	var encoded = encode(data, width, height, has_alpha, s_rgb)
+
+	for i := 0; i < b.N; i++ {
+		_, _, _, _, _, _ = decode(encoded)
+		if err != nil {
+			b.Error("failed to decode")
+		}
+	}
+}
+func TestEncodeDecodeGo(t *testing.T) {
+	var data, width, height, has_alpha, s_rgb, err = getImage("../go.jpg")
+	if err != nil {
+		t.Errorf("failed to open go file, %s", err)
+	}
+
+	var encoded = encode(data, width, height, has_alpha, s_rgb)
+	var decoded, d_width, d_height, d_has_alpha, d_s_rgb, err2 = decode(encoded)
+	if err2 != nil {
+		t.Error("failed to decode")
+	}
+	if !bytes.Equal(decoded, data) {
+		t.Error("conversion failed")
+	}
+	if d_width != width || d_height != height || d_has_alpha != has_alpha || d_s_rgb != s_rgb {
+		t.Error("image metadata got mangled during encode-decode roundtrip")
+	}
+}
+func BenchmarkEncodeDecodeRust(b *testing.B) {
+	var data, width, height, has_alpha, s_rgb, err = getImage("../rust.png")
+	if err != nil {
+		b.Errorf("failed to open go file, %s", err)
+	}
+
+	for i := 0; i < b.N; i++ {
+		var encoded = encode(data, width, height, has_alpha, s_rgb)
+		_, _, _, _, _, _ = decode(encoded)
+		if err != nil {
+			b.Error("failed to decode")
+		}
+	}
+}
+func TestEncodeDecodeRust(t *testing.T) {
+	var data, width, height, has_alpha, s_rgb, err = getImage("../rust.png")
+	if err != nil {
+		t.Errorf("failed to open go file, %s", err)
+	}
+
+	var encoded = encode(data, width, height, has_alpha, s_rgb)
+	var decoded, d_width, d_height, d_has_alpha, d_s_rgb, err2 = decode(encoded)
+	if err2 != nil {
+		t.Error("failed to decode")
+	}
+	if !bytes.Equal(decoded, data) {
+		t.Error("conversion failed")
+	}
+	if d_width != width || d_height != height || d_has_alpha != has_alpha || d_s_rgb != s_rgb {
+		t.Error("image metadata got mangled during encode-decode roundtrip")
 	}
 }
