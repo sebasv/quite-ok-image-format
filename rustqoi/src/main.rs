@@ -6,9 +6,13 @@ const QOI_HEADER_SIZE: usize = 14;
 const QOI_FOOTER_SIZE: usize = 8;
 const QOI_MAGIC: [u8; 4] = *b"qoif";
 const QOI_OP_RUN: u8 = 0b11000000;
+const QOI_OP_RUN_END: u8 = QOI_OP_RUN | 0b00111101;
 const QOI_OP_INDEX: u8 = 0b00000000;
+const QOI_OP_INDEX_END: u8 = QOI_OP_INDEX | 0b00111111;
 const QOI_OP_DIFF: u8 = 0b01000000;
+const QOI_OP_DIFF_END: u8 = QOI_OP_DIFF | 0b00111111;
 const QOI_OP_LUMA: u8 = 0b10000000;
+const QOI_OP_LUMA_END: u8 = QOI_OP_LUMA | 0b00111111;
 
 const QOI_OP_RGB: u8 = 0b11111110;
 const QOI_OP_RGBA: u8 = 0b11111111;
@@ -20,50 +24,48 @@ fn decode<'a>(
         return Err(String::from("bytestream too short"));
     }
     let (header, body) = data.as_ref().split_at(14);
-    let (body, _footer) = body.split_at(body.len() - QOI_FOOTER_SIZE);
+    let (mut body, _footer) = body.split_at(body.len() - QOI_FOOTER_SIZE);
     let (width, height, channels, colorspace) = try_decode_header(&header)?;
     let bytes_per_pixel = if channels { 4 } else { 3 };
     let mut out = Vec::with_capacity(width as usize * height as usize * bytes_per_pixel);
     let mut runner = Runner::new();
     let mut previous_pixel = Pixel::default();
-
-    let mut iter = body.iter();
-    while let Some(&byte) = iter.next() {
+    loop {
         let mut run = 1;
-        match byte {
-            QOI_OP_RGB => {
-                previous_pixel.r = *iter.next().unwrap();
-                previous_pixel.g = *iter.next().unwrap();
-                previous_pixel.b = *iter.next().unwrap();
+        match body {
+            [QOI_OP_RGB, r, g, b, tail @ ..] => {
+                previous_pixel = previous_pixel.update_rgb(*r, *g, *b);
                 runner.update(previous_pixel);
+                body = tail;
             }
-            QOI_OP_RGBA => {
-                previous_pixel.r = *iter.next().unwrap();
-                previous_pixel.g = *iter.next().unwrap();
-                previous_pixel.b = *iter.next().unwrap();
-                previous_pixel.a = *iter.next().unwrap();
+            [QOI_OP_RGBA, r, g, b, a, tail @ ..] => {
+                previous_pixel = previous_pixel.update_rgba(*r, *g, *b, *a);
                 runner.update(previous_pixel);
+                body = tail;
             }
-            _ => {
-                let data = byte & !QOI_OP_RUN;
-                match byte & QOI_OP_RUN {
-                    QOI_OP_RUN => run = 1 + data,
-                    QOI_OP_DIFF => {
-                        previous_pixel = previous_pixel.decode_diff(data);
-                        runner.update(previous_pixel);
-                    }
-                    QOI_OP_INDEX => {
-                        previous_pixel = runner.memory[data as usize];
-                    }
-                    QOI_OP_LUMA => {
-                        previous_pixel =
-                            previous_pixel.decode_luma_diff(data, *iter.next().unwrap());
-                        runner.update(previous_pixel);
-                    }
-                    _ => panic!("invalid byte encountered during decode"),
-                }
+            [byte @ QOI_OP_RUN..=QOI_OP_RUN_END, tail @ ..] => {
+                run = 1 + (byte & !QOI_OP_RUN);
+                body = tail;
             }
+            [byte @ QOI_OP_DIFF..=QOI_OP_DIFF_END, tail @ ..] => {
+                previous_pixel = previous_pixel.decode_diff(byte & !QOI_OP_RUN);
+                runner.update(previous_pixel);
+                body = tail;
+            }
+            [byte @ QOI_OP_INDEX..=QOI_OP_INDEX_END, tail @ ..] => {
+                previous_pixel = runner.memory[(byte & !QOI_OP_RUN) as usize];
+                runner.update(previous_pixel);
+                body = tail;
+            }
+            [byte_1 @ QOI_OP_LUMA..=QOI_OP_LUMA_END, byte_2, tail @ ..] => {
+                previous_pixel = previous_pixel.decode_luma_diff(byte_1 & !QOI_OP_RUN, *byte_2);
+                runner.update(previous_pixel);
+                body = tail;
+            }
+            [] => break,
+            _ => panic!("invalid pattern"),
         }
+
         for _ in 0..run {
             previous_pixel.copy_to_vec(&mut out)
         }
@@ -290,6 +292,24 @@ impl Pixel {
             g: 0,
             b: 0,
             a: 0,
+        }
+    }
+
+    fn update_rgb(&self, unwrap_1: u8, unwrap_2: u8, unwrap_3: u8) -> Pixel {
+        Pixel {
+            r: unwrap_1,
+            g: unwrap_2,
+            b: unwrap_3,
+            a: self.a,
+        }
+    }
+
+    fn update_rgba(&self, unwrap_1: u8, unwrap_2: u8, unwrap_3: u8, unwrap_4: u8) -> Pixel {
+        Pixel {
+            r: unwrap_1,
+            g: unwrap_2,
+            b: unwrap_3,
+            a: unwrap_4,
         }
     }
 }
