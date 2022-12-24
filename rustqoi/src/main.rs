@@ -13,9 +13,6 @@ const QOI_OP_LUMA: u8 = 0b10000000;
 const QOI_OP_RGB: u8 = 0b11111110;
 const QOI_OP_RGBA: u8 = 0b11111111;
 
-const LAST_TWO: u8 = 0b00000011;
-const LAST_FOUR: u8 = 0b00001111;
-
 fn decode<'a>(
     data: &'a (impl AsRef<[u8]> + ?Sized),
 ) -> Result<(Vec<u8>, u32, u32, bool, bool), String> {
@@ -52,14 +49,15 @@ fn decode<'a>(
                 match byte & QOI_OP_RUN {
                     QOI_OP_RUN => run = 1 + data,
                     QOI_OP_DIFF => {
-                        previous_pixel.decode_diff(data);
+                        previous_pixel = previous_pixel.decode_diff(data);
                         runner.update(previous_pixel);
                     }
                     QOI_OP_INDEX => {
                         previous_pixel = runner.memory[data as usize];
                     }
                     QOI_OP_LUMA => {
-                        previous_pixel.decode_luma_diff(data, *iter.next().unwrap());
+                        previous_pixel =
+                            previous_pixel.decode_luma_diff(data, *iter.next().unwrap());
                         runner.update(previous_pixel);
                     }
                     _ => panic!("invalid byte encountered during decode"),
@@ -237,19 +235,21 @@ impl Pixel {
     }
 
     #[inline(always)]
-    fn decode_diff(&mut self, data: u8) {
-        self.r = self.r.wrapping_add((data >> 4) & LAST_TWO).wrapping_sub(2);
-        self.g = self.g.wrapping_add((data >> 2) & LAST_TWO).wrapping_sub(2);
-        self.b = self.b.wrapping_add((data) & LAST_TWO).wrapping_sub(2);
+    fn decode_diff(self, data: u8) -> Pixel {
+        self - DIFF_OFFSET + Pixel::from_diff(data)
     }
 
     #[inline(always)]
-    fn decode_luma_diff(&mut self, data_1: u8, data_2: u8) {
-        let dg = data_1.wrapping_sub(32);
+    fn decode_luma_diff(self, data_1: u8, data_2: u8) -> Pixel {
+        const LAST_FOUR: u8 = 0b00001111;
+        let dg = (data_1).wrapping_sub(32);
         let dg_8 = dg.wrapping_sub(8);
-        self.r = self.r.wrapping_add(dg_8).wrapping_add(data_2 >> 4);
-        self.g = self.g.wrapping_add(dg);
-        self.b = self.b.wrapping_add(dg_8).wrapping_add(data_2 & LAST_FOUR);
+        Pixel {
+            r: self.r.wrapping_add(dg_8).wrapping_add(data_2 >> 4),
+            g: self.g.wrapping_add(dg),
+            b: self.b.wrapping_add(dg_8).wrapping_add(data_2 & LAST_FOUR),
+            a: self.a,
+        }
     }
 
     fn luma_diff_offset(&self) -> Option<(u8, u8)> {
