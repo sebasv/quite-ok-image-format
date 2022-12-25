@@ -9,7 +9,7 @@ edition = "2021"
 image = "0.24.5"
 
 [profile.bench]
-debug = true
+debug = false
 
 [profile.release]
-debug = true
+debug = false
