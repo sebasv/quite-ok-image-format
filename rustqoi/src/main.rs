@@ -40,7 +40,6 @@ fn decode<'a>(
     while let Some((pixel, run, tail)) = match_single_pattern(body, &mut runner, previous_pixel) {
         previous_pixel = pixel;
         body = tail;
-        // previous_pixel = pixel;
         for _ in 0..run {
             if let [r, g, b, a, tail @ ..] = out_slice {
                 previous_pixel.copy_to_vec(r, g, b, a);
@@ -249,16 +248,12 @@ const DIFF_OFFSET: Pixel = Pixel {
 };
 
 impl Pixel {
-    #[inline(never)]
+    #[inline(always)]
     fn copy_to_vec(&self, r: &mut u8, g: &mut u8, b: &mut u8, a: &mut u8) {
         *r = self.r;
         *g = self.g;
         *b = self.b;
         *a = self.a;
-        // vec.push_within_capacity(self.r);
-        // vec.push_within_capacity(self.g);
-        // vec.push_within_capacity(self.b);
-        // vec.push_within_capacity(self.a);
     }
 
     #[inline(always)]
@@ -693,17 +688,6 @@ mod benches {
             let _img = File::open("../go.qoi").unwrap().read_to_end(&mut buf);
             buf
         };
-        // let img = ImageReader::open("../go.jpg")
-        //     .unwrap()
-        //     .decode()
-        //     .unwrap()
-        //     .into_rgba8();
-        // let data = img.to_vec();
-        // let width = img.width();
-        // let height = img.height();
-        // let has_alpha = true;
-        // let s_rgb = true;
-        // let encoded = encode(&data, width as usize, height as usize, has_alpha, s_rgb).unwrap();
         b.iter(|| {
             let _decoded = decode(&encoded).unwrap();
         });
