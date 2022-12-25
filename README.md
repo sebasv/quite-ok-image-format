@@ -34,6 +34,7 @@ After adding a more extensive test I did find a bug in my Rust code! I forgot to
 * The Rust formatter is much more strict. The Go formatter leaves plenty of room for flamewars about indentation and camel vs snake naming.
 * The Go error convention is identical to Rust's (in that you return a value), except that Rust uses a proper Monad which provides all kinds of conveniences. In contrast Go requires you to write a LOT of if statements.
 * I did not get to try Go's prime selling point: Goroutines. They look really nice and I'd like to experiment with them on a suitable problem.
-* The Go code was a bit (~10%) slower for the encoder, but significantly faster (3x) for the decoder. This was my own fault for using a lot of temporary heap allocations; These are relatively cheap in a garbage-collected language like Go due to the reuse of freed memory but very expensive in Rust due to its explicit memory management.
-
-
+* The Go code was a bit (~20%) slower for the encoder, but significantly faster (12x) for the decoder. I made 2 mistakes in the Rust code that are less bad in garbage-collected languages:
+  - I created (heap-allocated) `Vec`s as intermediaries in a single computation. Such allocations are relatively cheap in a garbage-collected language like Go due to the reuse of free memory but very expensive in Rust due to its explicit memory management; each of these `Vec`s has to be allocated and freed, and the compiler failed to optimize them out of my code.
+  - I filled a pre-allocated but not pre-initialized `Vec` (`Vec::with_capacity`) that I filled with `push`es, which involves a lot of costly boundary checks etc. Again in simple code Rust would have optimized this away, but not this time. The solution was to do a slightly redundant `resize` on my vec to initialize it, and using pattern matching on a slice into the vec to avoid checks.
+  Overall the code is still idiomatic Rust, and now the decode is ~35% faster than the Go version.
