@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 )
 
 const QOI_HEADER_SIZE = 14
@@ -227,4 +228,7 @@ func int_to_bytes(i uint32) []byte {
 }
 func main() {
 	fmt.Println("Hello, World!")
+	dat, _ := os.ReadFile("../go.qoi")
+	var _, width, _, _, _, _ = decode(dat)
+	fmt.Println(width)
 }

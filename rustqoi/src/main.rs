@@ -1,6 +1,11 @@
 #![feature(test)]
+#![feature(vec_push_within_capacity)]
 extern crate test;
-use std::ops::{Add, Sub};
+use std::{
+    fs::File,
+    io::Read,
+    ops::{Add, Sub},
+};
 
 const QOI_HEADER_SIZE: usize = 14;
 const QOI_FOOTER_SIZE: usize = 8;
@@ -28,50 +33,66 @@ fn decode<'a>(
     let (width, height, channels, colorspace) = try_decode_header(&header)?;
     let bytes_per_pixel = if channels { 4 } else { 3 };
     let mut out = Vec::with_capacity(width as usize * height as usize * bytes_per_pixel);
+    out.resize(out.capacity(), 0);
+    let mut out_slice = out.as_mut_slice();
     let mut runner = Runner::new();
     let mut previous_pixel = Pixel::default();
-    loop {
-        let mut run = 1;
-        match body {
-            [QOI_OP_RGB, r, g, b, tail @ ..] => {
-                previous_pixel = previous_pixel.update_rgb(*r, *g, *b);
-                runner.update(previous_pixel);
-                body = tail;
-            }
-            [QOI_OP_RGBA, r, g, b, a, tail @ ..] => {
-                previous_pixel = previous_pixel.update_rgba(*r, *g, *b, *a);
-                runner.update(previous_pixel);
-                body = tail;
-            }
-            [byte @ QOI_OP_RUN..=QOI_OP_RUN_END, tail @ ..] => {
-                run = 1 + (byte & !QOI_OP_RUN);
-                body = tail;
-            }
-            [byte @ QOI_OP_DIFF..=QOI_OP_DIFF_END, tail @ ..] => {
-                previous_pixel = previous_pixel.decode_diff(byte & !QOI_OP_RUN);
-                runner.update(previous_pixel);
-                body = tail;
-            }
-            [byte @ QOI_OP_INDEX..=QOI_OP_INDEX_END, tail @ ..] => {
-                previous_pixel = runner.memory[(byte & !QOI_OP_RUN) as usize];
-                runner.update(previous_pixel);
-                body = tail;
-            }
-            [byte_1 @ QOI_OP_LUMA..=QOI_OP_LUMA_END, byte_2, tail @ ..] => {
-                previous_pixel = previous_pixel.decode_luma_diff(byte_1 & !QOI_OP_RUN, *byte_2);
-                runner.update(previous_pixel);
-                body = tail;
-            }
-            [] => break,
-            _ => panic!("invalid pattern"),
-        }
-
+    while let Some((pixel, run, tail)) = match_single_pattern(body, &mut runner, previous_pixel) {
+        previous_pixel = pixel;
+        body = tail;
+        // previous_pixel = pixel;
         for _ in 0..run {
-            previous_pixel.copy_to_vec(&mut out)
+            if let [r, g, b, a, tail @ ..] = out_slice {
+                previous_pixel.copy_to_vec(r, g, b, a);
+                out_slice = tail;
+            } else {
+                unreachable!();
+            }
         }
     }
 
     Ok((out, width, height, channels, colorspace))
+}
+
+#[inline(never)]
+fn match_single_pattern<'a>(
+    body: &'a [u8],
+    runner: &mut Runner,
+    previous_pixel: Pixel,
+) -> Option<(Pixel, u8, &'a [u8])> {
+    match body {
+        [QOI_OP_RGB, r, g, b, tail @ ..] => {
+            let pixel = previous_pixel.update_rgb(*r, *g, *b);
+            runner.update(previous_pixel);
+            return Some((pixel, 1, tail));
+        }
+        [QOI_OP_RGBA, r, g, b, a, tail @ ..] => {
+            let pixel = previous_pixel.update_rgba(*r, *g, *b, *a);
+            runner.update(previous_pixel);
+            return Some((pixel, 1, tail));
+        }
+        [byte @ QOI_OP_RUN..=QOI_OP_RUN_END, tail @ ..] => {
+            let run = 1 + (*byte & !QOI_OP_RUN);
+            return Some((previous_pixel, run, tail));
+        }
+        [byte @ QOI_OP_DIFF..=QOI_OP_DIFF_END, tail @ ..] => {
+            let pixel = previous_pixel.decode_diff(*byte & !QOI_OP_RUN);
+            runner.update(previous_pixel);
+            return Some((pixel, 1, tail));
+        }
+        [byte @ QOI_OP_INDEX..=QOI_OP_INDEX_END, tail @ ..] => {
+            let pixel = runner.memory[(*byte & !QOI_OP_RUN) as usize];
+            runner.update(previous_pixel);
+            return Some((pixel, 1, tail));
+        }
+        [byte_1 @ QOI_OP_LUMA..=QOI_OP_LUMA_END, byte_2, tail @ ..] => {
+            let pixel = previous_pixel.decode_luma_diff(*byte_1 & !QOI_OP_RUN, *byte_2);
+            runner.update(previous_pixel);
+            return Some((pixel, 1, tail));
+        }
+        [] => return None,
+        _ => panic!("invalid pattern"),
+    }
 }
 
 fn try_decode_header<'a>(data: &'a [u8]) -> Result<(u32, u32, bool, bool), String> {
@@ -228,12 +249,16 @@ const DIFF_OFFSET: Pixel = Pixel {
 };
 
 impl Pixel {
-    #[inline(always)]
-    fn copy_to_vec(&self, vec: &mut Vec<u8>) {
-        vec.push(self.r);
-        vec.push(self.g);
-        vec.push(self.b);
-        vec.push(self.a);
+    #[inline(never)]
+    fn copy_to_vec(&self, r: &mut u8, g: &mut u8, b: &mut u8, a: &mut u8) {
+        *r = self.r;
+        *g = self.g;
+        *b = self.b;
+        *a = self.a;
+        // vec.push_within_capacity(self.r);
+        // vec.push_within_capacity(self.g);
+        // vec.push_within_capacity(self.b);
+        // vec.push_within_capacity(self.a);
     }
 
     #[inline(always)]
@@ -376,31 +401,21 @@ impl Runner {
 
 fn main() {
     println!("Hello, world!");
-    let encoded = encode(&[], 0, 0, false, false);
-    println!("{:?}", encoded);
-    let decoded = decode(&encoded.unwrap());
-    println!("{:?}", decoded);
 
-    println!("{}", QOI_OP_DIFF | 0b00010101);
-    println!("{}", QOI_OP_DIFF | 0b00111111);
-    println!("{}", QOI_OP_RUN | 0b00000000);
-    println!(
-        "{}",
-        QOI_OP_INDEX
-            | Runner::hash(&Pixel {
-                r: 255,
-                g: 255,
-                b: 255,
-                a: 255
-            })
-    );
-    println!("{:b}", 193u8);
+    let encoded = {
+        let mut buf = Vec::with_capacity(1_000_000);
+        let _img = File::open("../go.qoi").unwrap().read_to_end(&mut buf);
+        buf
+    };
+    let decoded = decode(&encoded).unwrap();
+    println!("{}", decoded.1);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::io::Reader as ImageReader;
+    use std::{fs::File, io::Read};
     #[test]
     fn test_encode_2x2() {
         let black: [u8; 4] = [0, 0, 0, 255];
@@ -595,8 +610,12 @@ mod tests {
         let height = img.height();
         let has_alpha = true;
         let s_rgb = true;
-        let encoded = encode(&data, width as usize, height as usize, has_alpha, s_rgb);
-        let decoded = decode(&encoded.unwrap()).unwrap();
+        let encoded = encode(&data, width as usize, height as usize, has_alpha, s_rgb).unwrap();
+
+        // let mut file = File::create("../go.qoi").unwrap();
+        // file.write_all(&encoded).unwrap();
+
+        let decoded = decode(&encoded).unwrap();
         assert_eq!(
             (decoded.1, decoded.2, decoded.3, decoded.4),
             (width, height, has_alpha, s_rgb)
@@ -614,10 +633,22 @@ mod tests {
         );
         assert!(decoded.0.iter().eq(data.iter()), "data not the same");
     }
+
+    #[test]
+    fn test_decode_go() {
+        let encoded = {
+            let mut buf = Vec::with_capacity(1_000_000);
+            let _img = File::open("../go.qoi").unwrap().read_to_end(&mut buf);
+            buf
+        };
+        let _decoded = decode(&encoded).unwrap();
+    }
 }
 
 #[cfg(test)]
 mod benches {
+    use std::{fs::File, io::Read};
+
     use super::*;
     use image::io::Reader as ImageReader;
     use test::Bencher;
@@ -657,17 +688,22 @@ mod benches {
     }
     #[bench]
     fn bench_decode_go(b: &mut Bencher) {
-        let img = ImageReader::open("../go.jpg")
-            .unwrap()
-            .decode()
-            .unwrap()
-            .into_rgba8();
-        let data = img.to_vec();
-        let width = img.width();
-        let height = img.height();
-        let has_alpha = true;
-        let s_rgb = true;
-        let encoded = encode(&data, width as usize, height as usize, has_alpha, s_rgb).unwrap();
+        let encoded = {
+            let mut buf = Vec::with_capacity(1_000_000);
+            let _img = File::open("../go.qoi").unwrap().read_to_end(&mut buf);
+            buf
+        };
+        // let img = ImageReader::open("../go.jpg")
+        //     .unwrap()
+        //     .decode()
+        //     .unwrap()
+        //     .into_rgba8();
+        // let data = img.to_vec();
+        // let width = img.width();
+        // let height = img.height();
+        // let has_alpha = true;
+        // let s_rgb = true;
+        // let encoded = encode(&data, width as usize, height as usize, has_alpha, s_rgb).unwrap();
         b.iter(|| {
             let _decoded = decode(&encoded).unwrap();
         });
