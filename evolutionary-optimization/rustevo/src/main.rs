@@ -10,6 +10,7 @@ use rayon::prelude::*;
 #[derive(Debug)]
 enum Error {
     NanInTargetFunction,
+    WeightsAreZero,
 }
 
 fn evolution(
@@ -37,7 +38,7 @@ fn evolution(
     population
         .sort_unstable_by(|a, b| b.fitness.partial_cmp(&a.fitness).unwrap_or(Ordering::Equal));
 
-    let mut children = Vec::new();
+    let mut children: Vec<Agent> = Vec::with_capacity(population_size);
 
     let mut iteration = 0;
     let mut f_eps = population[0].fitness - population[population_size].fitness;
@@ -45,19 +46,20 @@ fn evolution(
         if population.iter().any(|a| a.fitness.is_nan()) {
             return Err(Error::NanInTargetFunction);
         }
-        let distances: Vec<f64> = population
-            .par_iter()
+        let distances = population
+            .iter()
             .take(population_size)
             .map(|agent| agent.location.norm_l2())
-            .collect();
-        let distance_matrix =
-            Array2::from_shape_fn((population_size, population_size), |(i, j)| {
-                distance_func(&distances, i, j)
-            });
-        let partner_choice: Vec<&Agent> = distance_matrix
-            .axis_iter(Axis(0))
-            .map(|ax| &population[WeightedIndex::new(&ax).unwrap().sample(&mut rng)])
-            .collect();
+            .enumerate();
+
+        let partner_choice = distances
+            .clone()
+            .map(|(i, d1)| {
+                WeightedIndex::new(distances.clone().map(|(j, d2)| distance_func(i, j, d1, d2)))
+                    .and_then(|s| Ok(&population[s.sample(&mut rng)]))
+                    .or(Err(Error::WeightsAreZero))
+            })
+            .collect::<Result<Vec<&Agent>, Error>>()?;
 
         let recombination_weights: Vec<f64> = (&mut rng)
             .sample_iter(Standard)
@@ -78,9 +80,10 @@ fn evolution(
             })
             .collect();
 
+        // children =
         population
+            // .iter()
             .par_iter()
-            .take(population_size)
             .zip(partner_choice)
             .zip(recombination_weights)
             .zip(mutations)
@@ -96,6 +99,7 @@ fn evolution(
                     &f,
                 )
             })
+            // .collect();
             .collect_into_vec(&mut children);
         population[population_size..].swap_with_slice(&mut children);
 
@@ -137,11 +141,11 @@ fn make_child(
 }
 
 #[inline(always)]
-fn distance_func(distances: &Vec<f64>, i: usize, j: usize) -> f64 {
+fn distance_func(i: usize, j: usize, d1: f64, d2: f64) -> f64 {
     if i == j {
         0.
     } else {
-        (-(distances[i].powi(2) + distances[j].powi(2) - 2f64 * distances[i] * distances[j])).exp()
+        (-(d1.powi(2) + d2.powi(2) - 2f64 * d1 * d2)).exp()
     }
 }
 
