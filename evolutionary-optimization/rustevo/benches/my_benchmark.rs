@@ -1,10 +1,9 @@
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ndarray::prelude::*;
 use rustevo::evolution;
 use std::f64::consts::PI;
 
-fn main() {
-    println!("Hello, world!");
-    // let v = Array1::from_vec(vec![])
+fn criterion_benchmark(c: &mut Criterion) {
     let f = |x: &ArrayView1<f64>| {
         let levi = f64::sin(x[0] * 3. * PI).powi(2)
             + (x[0] - 1.).powi(2) * (1. + f64::sin(x[1] * 3. * PI).powi(2))
@@ -19,18 +18,22 @@ fn main() {
     let mutation_probability = 0.1;
     let mutation_scale = 0.1;
     let seed = 42;
-    match evolution(
-        f,
-        bounds,
-        population_size,
-        max_iter,
-        f_eps,
-        learn_rate,
-        mutation_probability,
-        mutation_scale,
-        seed,
-    ) {
-        Ok(res) => println!("success! found {:?}", res),
-        Err(e) => println!("errored: {:?}", e),
-    }
+    c.bench_function("fib 20", |b| {
+        b.iter(|| {
+            evolution(
+                f,
+                bounds,
+                population_size,
+                max_iter,
+                f_eps,
+                learn_rate,
+                mutation_probability,
+                mutation_scale,
+                seed,
+            )
+        })
+    });
 }
+
+criterion_group!(benches, criterion_benchmark);
+criterion_main!(benches);
