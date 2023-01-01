@@ -147,13 +147,13 @@ fn distance_func(i: usize, j: usize, d1: f64, d2: f64) -> f64 {
 
 #[derive(Debug)]
 pub struct EvoResult {
-    agent: Agent,
-    n_iter: usize,
-    f_eps: f64,
+    pub agent: Agent,
+    pub n_iter: usize,
+    pub f_eps: f64,
 }
 
 #[derive(Debug, Clone)]
-struct Agent {
-    location: Array1<f64>,
-    fitness: f64,
+pub struct Agent {
+    pub location: Array1<f64>,
+    pub fitness: f64,
 }
